@@ -957,7 +957,7 @@ async def execute_run_async(
             stream_mode_list = stream_mode.copy()
 
         async with (
-            langgraph_service.get_graph(graph_id) as graph,
+            langgraph_service.get_graph(graph_id, run_config) as graph,
             with_auth_ctx(user, []),
         ):
             # Stream events using the graph_streaming service

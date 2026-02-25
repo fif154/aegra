@@ -1,5 +1,10 @@
 """Agent Protocol Pydantic models"""
 
+from aegra_api.models.agent_configurations import (
+    AgentConfiguration,
+    AgentConfigurationCreate,
+    AgentConfigurationList,
+)
 from aegra_api.models.assistants import (
     AgentSchemas,
     Assistant,
@@ -69,6 +74,10 @@ __all__ = [
     "StoreDeleteRequest",
     "StoreListNamespacesRequest",
     "StoreListNamespacesResponse",
+    # Agent Configurations
+    "AgentConfiguration",
+    "AgentConfigurationCreate",
+    "AgentConfigurationList",
     # Errors
     "AgentProtocolError",
     "get_error_type",

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute, APIRouter
 
+from aegra_api.api.agent_configurations import router as agent_configurations_router
 from aegra_api.api.assistants import router as assistants_router
 from aegra_api.api.runs import router as runs_router
 from aegra_api.api.stateless_runs import router as stateless_runs_router
@@ -44,6 +45,7 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
     {"name": "Thread Runs", "description": "Invoke a graph on a thread, updating its persistent state."},
     {"name": "Stateless Runs", "description": "Invoke a graph without state or memory persistence."},
     {"name": "Store", "description": "Persistent key-value and semantic storage available from any thread."},
+    {"name": "Agent Configurations", "description": "Stored agent configurations with metadata."},
     {"name": "Health", "description": "Server health checks and service information."},
 ]
 
@@ -263,6 +265,7 @@ def _include_core_routers(app: FastAPI) -> None:
     app.include_router(runs_router)
     app.include_router(stateless_runs_router)
     app.include_router(store_router)
+    app.include_router(agent_configurations_router)
 
 
 def create_app() -> FastAPI:

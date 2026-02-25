@@ -123,6 +123,18 @@ class Run(Base):
     )
 
 
+class AgentConfiguration(Base):
+    __tablename__ = "agent_configuration"
+
+    id: Mapped[str] = mapped_column(
+        Text, primary_key=True, server_default=text("public.uuid_generate_v4()::text")
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("now()"))
+
+
 class RunEvent(Base):
     __tablename__ = "run_events"
 
