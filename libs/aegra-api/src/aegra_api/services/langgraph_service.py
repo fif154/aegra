@@ -72,8 +72,11 @@ class LangGraphService:
         # Cache for static compiled base graphs (without checkpointer/store)
         self._base_graph_cache: dict[str, Pregel] = {}
         # Factory callables: graph_id -> async/sync callable(config) -> Pregel
-        # These are NOT cached; they are invoked fresh on every request.
         self._graph_factories: dict[str, Any] = {}
+        # Per-thread cache for factory graphs: (graph_id, thread_id) -> Pregel
+        # The factory is called once per unique thread_id; subsequent requests
+        # for the same thread reuse the cached compiled graph.
+        self._thread_graph_cache: dict[tuple[str, str], Pregel] = {}
 
     async def initialize(self):
         """Load configuration file and setup graph registry.
@@ -212,10 +215,15 @@ class LangGraphService:
         reused for every subsequent call (config is ignored).
 
         For **factory** graphs (callables that accept a ``config`` argument)
-        the factory is stored once and invoked on every call with the supplied
-        config so that graph topology can vary per-request.  Pass ``config``
-        when available for best results; an empty dict is used as a fallback
-        (e.g. for schema/validation operations).
+        the result is cached per ``thread_id`` (extracted from
+        ``config["configurable"]["thread_id"]``):
+        - First request for a given thread: factory is called and the compiled
+          graph is stored in ``_thread_graph_cache[(graph_id, thread_id)]``.
+        - Subsequent requests for the same thread: cached graph is returned
+          immediately without invoking the factory again.
+        - When no thread_id is present (e.g. schema/validation calls): the
+          factory is called with an empty config and the result is **not**
+          cached.
 
         @param graph_id: The graph identifier from aegra.json
         @param config: Optional RunnableConfig forwarded to factory graphs
@@ -226,13 +234,8 @@ class LangGraphService:
             raise ValueError(f"Graph not found: {graph_id}")
 
         # --- Factory graph path ---
-        # If already discovered as a factory, invoke it with the supplied config
         if graph_id in self._graph_factories:
-            factory = self._graph_factories[graph_id]
-            raw = await factory(config or {})
-            if isinstance(raw, StateGraph):
-                return raw.compile()
-            return raw
+            return await self._invoke_factory(graph_id, self._graph_factories[graph_id], config)
 
         # --- Static graph path ---
         # Return cached base graph if available
@@ -247,11 +250,8 @@ class LangGraphService:
         # Detect factory callables and register them
         if callable(raw_graph) and _detect_factory(raw_graph):
             self._graph_factories[graph_id] = raw_graph
-            logger.info(f"Registered factory graph '{graph_id}' (invoked per-request)")
-            raw = await raw_graph(config or {})
-            if isinstance(raw, StateGraph):
-                return raw.compile()
-            return raw
+            logger.info(f"Registered factory graph '{graph_id}' (cached per thread_id)")
+            return await self._invoke_factory(graph_id, raw_graph, config)
 
         # Compile if it's a StateGraph
         if isinstance(raw_graph, StateGraph):
@@ -263,6 +263,36 @@ class LangGraphService:
         # Cache the base compiled graph (without checkpointer/store)
         self._base_graph_cache[graph_id] = compiled_graph
         return compiled_graph
+
+    async def _invoke_factory(self, graph_id: str, factory: Any, config: RunnableConfig | None) -> Pregel:
+        """Call a factory function, caching the result by (graph_id, thread_id).
+
+        If ``config`` carries a ``thread_id`` the compiled graph is stored in
+        ``_thread_graph_cache`` and reused on subsequent calls for the same
+        thread.  Without a ``thread_id`` the factory is called each time and
+        the result is not cached (used for schema/validation operations).
+
+        @param graph_id: The graph identifier (used as part of the cache key)
+        @param factory: Async or sync callable that accepts a RunnableConfig
+        @param config: Optional RunnableConfig forwarded to the factory
+        @returns: Compiled Pregel graph (without checkpointer/store)
+        """
+        thread_id: str | None = (config or {}).get("configurable", {}).get("thread_id")
+
+        if thread_id is not None:
+            cache_key: tuple[str, str] = (graph_id, thread_id)
+            if cache_key in self._thread_graph_cache:
+                logger.debug(f"Reusing cached factory graph '{graph_id}' for thread '{thread_id}'")
+                return self._thread_graph_cache[cache_key]
+
+        raw = await factory(config or {})
+        compiled: Pregel = raw.compile() if isinstance(raw, StateGraph) else raw
+
+        if thread_id is not None:
+            logger.info(f"Caching factory graph '{graph_id}' for thread '{thread_id}'")
+            self._thread_graph_cache[(graph_id, thread_id)] = compiled
+
+        return compiled
 
     @asynccontextmanager
     async def get_graph(self, graph_id: str, config: RunnableConfig | None = None) -> AsyncIterator[Pregel]:
@@ -383,17 +413,20 @@ class LangGraphService:
     def invalidate_cache(self, graph_id: str | None = None) -> None:
         """Invalidate graph cache for hot-reload.
 
-        Clears both the static graph cache and the factory registry so that
-        the graph file is re-imported on the next request.
+        Clears the static graph cache, the factory registry, and per-thread
+        factory caches so that the graph file is re-imported on the next request.
 
         @param graph_id: Specific graph to invalidate, or None to clear all
         """
         if graph_id:
             self._base_graph_cache.pop(graph_id, None)
             self._graph_factories.pop(graph_id, None)
+            for key in [k for k in self._thread_graph_cache if k[0] == graph_id]:
+                del self._thread_graph_cache[key]
         else:
             self._base_graph_cache.clear()
             self._graph_factories.clear()
+            self._thread_graph_cache.clear()
 
     def get_config(self) -> dict[str, Any] | None:
         """Get loaded configuration"""
